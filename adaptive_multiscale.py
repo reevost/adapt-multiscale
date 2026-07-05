@@ -3,7 +3,6 @@ from scipy.sparse import csc_array
 from scipy.sparse.linalg import cg, svds
 import matplotlib.pyplot as plt
 from utils import write_array_on_file, write_matrix_on_file  # to remove after data gathering
-import time
 
 
 w11 = lambda r: np.where(1 - r < 0, 0, 1 - r) ** 3 * (3 * r + 1)
