@@ -290,7 +290,7 @@ def point_selection_1d(nested_set, nested_size_level, selection_values, cut_mask
             selection_mask[selection_mask] &= np.abs(
                 nested_set[:nested_size_level][selection_mask] - nested_set[i]) > radius
         print(
-            f"selected {sum(selection_mask)} over {nested_size_level} points. With {threshold = } and {radius = :.6g}.")
+            f"selected {sum(selection_mask)} over {nested_size_level} points. With {threshold = :.6g} and {radius = :.6g}.")
         return cut_mask, selection_mask, sum(selection_mask)
 
 
@@ -369,7 +369,7 @@ def point_array_selection(nested_set, nested_size_level, selection_values, cut_m
             selection_mask[selection_mask] &= np.sqrt(
                 np.sum((nested_set[:nested_size_level][selection_mask] - nested_set[i]) ** 2, axis=-1)) > radius
         print(
-            f"selected {sum(selection_mask)} over {nested_size_level} points. With {threshold = } and {radius = :.6g}.")
+            f"selected {sum(selection_mask)} over {nested_size_level} points. With {threshold = :.6g} and {radius = :.6g}.")
         return cut_mask, selection_mask, sum(selection_mask)
 
 
@@ -566,6 +566,7 @@ def multiscale_interp_adapt1d(nested_size, nested_set, target_rhs, mu, nu, k, ev
     removed_mask = np.zeros(N, dtype=np.bool)  # cut mask initialization
     local_set_cardinality_ratio = np.zeros(number_of_levels)  # store the percentage of used points at every level
     threshold = eps_0  # define starting threshold
+    tmp_thresholding_list = np.zeros(number_of_levels)
     # iterate over the levels of the approximation
     for current_level in range(number_of_levels):
         # set up the cut_mask (for l < L_star we do not want to count already removed points)
@@ -605,7 +606,7 @@ def multiscale_interp_adapt1d(nested_size, nested_set, target_rhs, mu, nu, k, ev
             eps_mask[~eps_mask] = np.abs(nested_set[~eps_mask] - nested_set[i]) < \
                                   rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
         threshold += np.max(local_approx[eps_mask], initial=0)
-
+        tmp_thresholding_list[current_level] = threshold
         # update evaluation of the solution and error
         # copy previous values
         approx_list += [approx_list[-1]]
@@ -639,7 +640,8 @@ def multiscale_interp_adapt1d(nested_size, nested_set, target_rhs, mu, nu, k, ev
     point_ratio_ax.plot(np.arange(number_of_levels), local_set_cardinality_ratio, label="#tilda_X over #X")
     plt.title("ratio of spared points w.r.t. level")
     plt.show()
-
+    write_array_on_file(local_set_cardinality_ratio, f"point_ratio_{mu}.csv")
+    write_array_on_file(tmp_thresholding_list, f"thresholding_{mu}.csv")
 
 def multiscale_interp_adapt2d(nested_size, nested_set, target_rhs, mu, nu, k, eval_set, eval_target, eval_grid_shape,
                               h1, rad_const, eps_0=1e-5):
@@ -901,7 +903,7 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
     if adapt_start < 0:
         adapt_start = L_star
     print(f"Running 1d-multiscale interpolation with: {number_of_levels} levels, {L_star = }, "
-          f"{mu = }, {nu = }, {k = }, {h1 = }, {rad_const = } and {eps_0 = }.\n"
+          f"{mu = }, {nu = }, {k = }, {h1 = }, {rad_const = }, {eps_0 = } and {adapt_start = }.\n"
           f"Displayed results computed over {M} equispaced points.\n")
 
     # --- Function body -------------------------------------------------------
@@ -912,6 +914,7 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
     removed_mask = np.zeros(N, dtype=np.bool)  # cut mask initialization
     local_set_cardinality_ratio = np.zeros(number_of_levels)  # store the percentage of used points at every level
     threshold = eps_0  # define starting threshold
+    tmp_thresholding_list = np.zeros(number_of_levels)
     # iterate over the levels of the approximation
     for current_level in range(number_of_levels):
         # just for L >= adapt_start we apply the adaptivity steps
@@ -954,7 +957,7 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
                 eps_mask[~eps_mask] = np.abs(nested_set[~eps_mask] - nested_set[i]) < \
                                       rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
             threshold += np.max(local_approx[eps_mask], initial=0)
-
+        tmp_thresholding_list[current_level] = threshold
         # update evaluation of the solution and error
         # copy previous values
         approx_list += [approx_list[-1]]
@@ -986,7 +989,9 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
     point_ratio_ax.plot(np.arange(number_of_levels), local_set_cardinality_ratio, label="#tilda_X over #X")
     plt.title("ratio of spared points w.r.t. level")
     plt.show()
-    # write_array_on_file(local_set_cardinality_ratio, f"set_ratio_{adapt_start}.csv")
+    write_array_on_file(local_set_cardinality_ratio, f"point_ratio_mix_{mu}.csv")
+    write_array_on_file(tmp_thresholding_list, f"thresholding_mix_{mu}.csv")
+
 
 
 def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu, k, eval_set, eval_target, h1, rad_const,
@@ -1165,11 +1170,12 @@ def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu,
 # define target function and compute approximation
 top = 10
 bottom = 0
-# 14-11-8-6-4-3
-L = 9
+# 9-7-6-5-4-3
+L = 7
 d = 1
 k_ = 2
 mu_ = 0.4
+nu_ = 2
 kappa = 2
 supp_rad = 0.09
 supp_cent = top / 2
@@ -1210,7 +1216,7 @@ if d == 2:
     multiscale_interp_adapt2d(nested_size=nest2d_size,
                               nested_set=nest2d_set,
                               target_rhs=C2(nest2d_set),
-                              mu=mu_, nu=4, k=k_,
+                              mu=mu_, nu=nu_, k=k_,
                               eval_set=eval_points,
                               eval_target=C2(eval_points),
                               eval_grid_shape=eval_meshed[0].shape,
@@ -1221,32 +1227,33 @@ if d == 2:
 
 # ---------- 1d setting --------------
 if d == 1:
-    nest1d_set, nest1d_size = generate_1d_nested_sequence(starting_step_size=mu_ / np.sqrt(d), mu=mu_, levels=L,
-                                                          end=top, start=bottom)
-    fig = plt.figure(num=11)
-    ax = fig.add_subplot()
-    for level in range(L - 1, -1, -1):
-        plt.scatter(nest1d_set[:nest1d_size[level]], level * np.ones((nest1d_size[level])))
-    plt.show()
+    for kappa in range(5, 7):
+        nest1d_set, nest1d_size = generate_1d_nested_sequence(starting_step_size=mu_ / np.sqrt(d), mu=mu_, levels=L,
+                                                              end=top, start=bottom)
+        fig = plt.figure(num=11)
+        ax = fig.add_subplot()
+        for level in range(L - 1, -1, -1):
+            plt.scatter(nest1d_set[:nest1d_size[level]], level * np.ones((nest1d_size[level])))
+        plt.show()
 
-    eval_N = 500
-    eval_points = np.linspace(bottom, top, eval_N)
-    fig = plt.figure(num=12)
-    ax = fig.add_subplot()
-    ax.plot(eval_points, C1(eval_points), linewidth=1, antialiased=False)
-    ax.set_title("true function", fontsize="small")
-    plt.show()
+        eval_N = 500
+        eval_points = np.linspace(bottom, top, eval_N)
+        fig = plt.figure(num=12)
+        ax = fig.add_subplot()
+        ax.plot(eval_points, C1(eval_points), linewidth=1, antialiased=False)
+        ax.set_title("true function", fontsize="small")
+        plt.show()
 
-    multiscale_interp_adapt1d(nested_size=nest1d_size,
-                              nested_set=nest1d_set,
-                              target_rhs=C1(nest1d_set),
-                              mu=mu_, nu=3, k=k_,
-                              eval_set=eval_points,
-                              eval_target=C1(eval_points),
-                              h1=mu_ / np.sqrt(d),
-                              rad_const=kappa,
-                              eps_0=1e-12
-                              )
+        multiscale_interp_adapt1d(nested_size=nest1d_size,
+                                  nested_set=nest1d_set,
+                                  target_rhs=C1(nest1d_set),
+                                  mu=mu_, nu=nu_, k=k_,
+                                  eval_set=eval_points,
+                                  eval_target=C1(eval_points),
+                                  h1=mu_ / np.sqrt(d),
+                                  rad_const=kappa,
+                                  eps_0=1e-8
+                                  )
 
 # ---------- 1d setting -------------- (mixed)
 if d == 3:
@@ -1266,15 +1273,14 @@ if d == 3:
     ax.set_title("true function", fontsize="small")
     plt.show()
 
-    for ls in range(3):
-        multiscale_interp_mix1d(nested_size=nest1d_size,
-                                nested_set=nest1d_set,
-                                target_rhs=C1(nest1d_set),
-                                mu=mu_, nu=3, k=k_,
-                                eval_set=eval_points,
-                                eval_target=C1(eval_points),
-                                h1=mu_ / np.sqrt(d),
-                                rad_const=kappa,
-                                adapt_start=ls,
-                                eps_0=1e-8
-                                )
+    multiscale_interp_mix1d(nested_size=nest1d_size,
+                            nested_set=nest1d_set,
+                            target_rhs=C1(nest1d_set),
+                            mu=mu_, nu=nu_, k=k_,
+                            eval_set=eval_points,
+                            eval_target=C1(eval_points),
+                            h1=mu_ / np.sqrt(d),
+                            rad_const=kappa,
+                            #adapt_start=1,
+                            eps_0=1e-8
+                            )
