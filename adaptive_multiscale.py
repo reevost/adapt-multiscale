@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.sparse import csc_array
-from scipy.sparse.linalg import cg, svds
+from scipy.sparse.linalg import cg
 import matplotlib.pyplot as plt
 from utils import write_array_on_file, write_matrix_on_file  # to remove after data gathering
 
@@ -589,9 +589,12 @@ def multiscale_interp_adapt1d(nested_size, nested_set, target_rhs, mu, nu, k, ev
         # compute the scale and the kernel matrix
         delta = nu * h1 * mu ** current_level
         kernel_matrix = w11_kernel_matrix(nested_set[:N_l], nested_set[:N_l], delta, 1)
-        # SVD decomposition
-        U, S, Vt = svds(A=kernel_matrix, k=N_l, solver="propack")
-        inv_kernel_matrix = Vt.T @ np.diag(1/S) @ U.T
+        # inverse computation decomposition
+        inv_kernel_matrix = np.empty(kernel_matrix.shape)
+        for i in range(N_l):
+            tmp_v = np.zeros(N_l)
+            tmp_v[i] = 1
+            inv_kernel_matrix[:, i], _ = cg(kernel_matrix, tmp_v, rtol=eps_0)
 
         # update rhs on the finest grid, computing the cardinals
         # since the set are nested, we do not need to compute the cardinals on points contained at this level.
@@ -759,9 +762,12 @@ def multiscale_interp_adapt2d(nested_size, nested_set, target_rhs, mu, nu, k, ev
         # compute the scale and the kernel matrix
         delta = nu * h1 * mu ** current_level
         kernel_matrix = w31_kernel_matrix(nested_set[:N_l], nested_set[:N_l], delta, dim)
-        # SVD decomposition
-        U, S, Vt = svds(A=kernel_matrix, k=N_l, solver="propack")
-        inv_kernel_matrix = Vt.T @ np.diag(1/S) @ U.T
+        # inverse computation decomposition
+        inv_kernel_matrix = np.empty(kernel_matrix.shape)
+        for i in range(N_l):
+            tmp_v = np.zeros(N_l)
+            tmp_v[i] = 1
+            inv_kernel_matrix[:, i], _ = cg(kernel_matrix, tmp_v, rtol=eps_0)
 
         # update rhs on the finest grid, computing the cardinals
         # since the set are nested, we do not need to compute the cardinals on points contained at this level.
@@ -939,9 +945,12 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
         # compute the scale and the kernel matrix
         delta = nu * h1 * mu ** current_level
         kernel_matrix = w11_kernel_matrix(nested_set[:N_l], nested_set[:N_l], delta, 1)
-        # SVD decomposition
-        U, S, Vt = svds(A=kernel_matrix, k=N_l, solver="propack")
-        inv_kernel_matrix = Vt.T @ np.diag(1/S) @ U.T
+        # inverse computation decomposition
+        inv_kernel_matrix = np.empty(kernel_matrix.shape)
+        for i in range(N_l):
+            tmp_v = np.zeros(N_l)
+            tmp_v[i] = 1
+            inv_kernel_matrix[:, i], _ = cg(kernel_matrix, tmp_v, rtol=eps_0)
 
         # update rhs on the finest grid, computing the cardinals
         # since the set are nested, we do not need to compute the cardinals on points contained at this level.
@@ -984,6 +993,8 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
             write_matrix_on_file(
                 np.concatenate([eval_points.reshape((-1, 1)), error_list[-2].reshape((-1, 1))], axis=-1),
                 f"mix_error_{current_level}.csv", ".9f")
+        if not N_check:
+            break
     point_ratio_fig = plt.figure(num=number_of_levels)
     point_ratio_ax = point_ratio_fig.add_subplot(1, 1, 1)
     point_ratio_ax.plot(np.arange(number_of_levels), local_set_cardinality_ratio, label="#tilda_X over #X")
@@ -993,11 +1004,10 @@ def multiscale_interp_mix1d(nested_size, nested_set, target_rhs, mu, nu, k, eval
     write_array_on_file(tmp_thresholding_list, f"thresholding_mix_{mu}.csv")
 
 
-
-def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu, k, eval_set, eval_target, h1, rad_const,
-                                    eps_0=1e-2, tolerance=1e-5):
+def multiscale_interp_mix1d_local(nested_size, nested_set, target_rhs, mu, nu, k, eval_set, eval_target, h1, rad_const, rho_const,
+                            adapt_start=-1, eps_0=1e-5):
     """
-    Bonus algorithm. More computational friendly, require more theoretical assessment.
+    Mixed-adapt algorithm from paper.
 
     Parameters:
         nested_size (np.ndarray of ints):
@@ -1016,19 +1026,22 @@ def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu,
                 Parameter related to support of the kernel function. Must be positive.
         k (float):
                 Parameter related to the nested set construction. Must be greater than 1.
-        eval_set (np.ndarray of floats)
+        eval_set (np.ndarray of floats):
                 Set of points where the approximation is evaluated and displayed. The array must have dimension 1
                 and shape (M,).
-        eval_target (np.ndarray of floats)
+        eval_target (np.ndarray of floats):
                 Array of values associated with the evaluation points with shape (M,).
         h1 (float):
                 Fill distance of the first set, i.e. nested_set[:nested_size[0]]. Must be positive.
         rad_const (float):
                 Parameter involved in the selection process. Must be positive.
+        rho_const (float):
+                Parameter involved local cardinal enforcement condition.
+                Must be positive but smaller than k * rad_const.
         eps_0 (float):
-                Starting thresholding parameter. Must be non-negative. Default value: 1e-2.
-        tolerance (float):
-                Relative tolerance in the conjugate gradient. Must be non-negative. Default value: 1e-5.
+                Starting thresholding parameter. Must be non-negative. Default value: 1e-5.
+        adapt_start (int):
+                Starting level for the adaptive routine
     """
     # note: target eval is not necessary for the approximation itself, just to have error plots.
     # --- Input validation ----------------------------------------------------
@@ -1071,15 +1084,21 @@ def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu,
     if not isinstance(rad_const, (int, float)) or 0 >= rad_const:
         raise ValueError(f"rad_const must be a positive number, got {rad_const = } instead.")
 
+    if not isinstance(rho_const, (int, float)) or 0 >= rho_const >= k*rad_const:
+        raise ValueError(f"rad_const must be a positive number smaller than {k*rad_const = },"
+                         f" got {rad_const = } instead.")
+
     if not isinstance(eps_0, (int, float)) or 0 > eps_0:
         raise ValueError(f"eps_0 must be a non-negative number, got {eps_0 = } instead.")
 
-    if not isinstance(tolerance, (int, float)) or 0 > tolerance:
-        raise ValueError(f"tolerance must be a non-negative number, got {tolerance = } instead.")
+    if not isinstance(adapt_start, int):
+        raise ValueError(f"adapt_start must be an integer, got {adapt_start = } instead.")
 
     L_star = np.ceil(k * mu / (1 - k * mu))
+    if adapt_start < 0:
+        adapt_start = L_star
     print(f"Running 1d-multiscale interpolation with: {number_of_levels} levels, {L_star = }, "
-          f"{mu = }, {nu = }, {k = }, {h1 = }, {rad_const = }, {eps_0 = } and {tolerance = }.\n"
+          f"{mu = }, {nu = }, {k = }, {h1 = }, {rad_const = }, {eps_0 = } and {adapt_start = }.\n"
           f"Displayed results computed over {M} equispaced points.\n")
 
     # --- Function body -------------------------------------------------------
@@ -1087,82 +1106,112 @@ def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu,
     approx_list = [np.zeros(M)]
     error_list = [eval_target]
     # setup of variables for routine
-    removed_mask = np.zeros(N, dtype=bool)  # cut mask initialization
+    removed_mask = np.zeros(N, dtype=np.bool)  # cut mask initialization
     local_set_cardinality_ratio = np.zeros(number_of_levels)  # store the percentage of used points at every level
     threshold = eps_0  # define starting threshold
+    tmp_thresholding_list = np.zeros(number_of_levels)
     # iterate over the levels of the approximation
     for current_level in range(number_of_levels):
-        # set up the cut_mask (for l < L_star we do not want to count already removed points)
-        if current_level < L_star:
-            removed_mask = np.zeros(nested_size[-1], dtype=bool)
-        # select the points to reduce computational cost
-        removed_mask, local_mask, N_check = point_selection_1d(
-            nested_set,
-            nested_size[current_level],
-            target_rhs,
-            removed_mask,
-            threshold,
-            k * rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
-        )
-        # store the percentage of used point at the current level
-        local_set_cardinality_ratio[current_level] = N_check / nested_size[current_level]
-        # update rhs and point set
-        selected_multiset = nested_set[:nested_size[current_level]][local_mask]
-        # compute the kernel matrix
-        delta = nu * h1 * mu ** current_level
-        dist_matrix = np.empty((N_check, N_check), dtype=np.float64)
-        for column in range(N_check):
-            dist_matrix[:, column] = np.abs(selected_multiset - selected_multiset[column])
-        # here phi_l = delta_l(\|.\|/delta_l)
-        kernel_matrix = w31(dist_matrix / delta) / delta  # RBF
-        # solve the system
-        alpha, _ = cg(kernel_matrix, target_rhs[:nested_size[current_level]][local_mask], rtol=tolerance)
+        # just for L >= adapt_start we apply the adaptivity steps
+        N_l = nested_size[current_level]
+        if current_level >= adapt_start:
+            # select the points to reduce computational cost
+            removed_mask, local_mask, N_check = point_selection_1d(
+                nested_set,
+                N_l,
+                target_rhs,
+                removed_mask,
+                threshold,
+                k * rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
+            )
+            local_set_cardinality_ratio[current_level] = N_check / N_l
+            # update rhs and point set
+            selected_multiset = nested_set[:N_l][local_mask]
+            # compute the scale
+            delta = nu * h1 * mu ** current_level
+            # inverse computation decomposition
+            inv_kernel_matrix = np.zeros((N_l, N_l))
+            for i_global in np.arange(N_l)[local_mask]:
+                # in the local setting we enforce condition only in a neighbourhood of the reference point
+                # compute the mask of the neighbourhood
+                ngh_mask = np.abs(nested_set[:N_l][i_global] - nested_set[:N_l]) < \
+                           rho_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
+                N_loc = np.sum(ngh_mask)
+                i_local = np.argwhere(np.arange(N_l)[ngh_mask]==i_global)[0][0]
+                # compute the local kernel matrix
+                kernel_matrix_local = w11_kernel_matrix(nested_set[:N_l][ngh_mask], nested_set[:N_l][ngh_mask], delta, 1)
+                # compute the inverso of the local matrix and store coefficient of the point of interest
+                for j_local, j_global in enumerate(np.arange(N_l)[ngh_mask]):
+                    tmp_v = np.zeros(N_loc)
+                    tmp_v[j_local] = 1
+                    # here we are interested on the result entry associated with the "i-th" point
+                    # which is associated with the entry np.arange(N_l)[ngh_mask] in the local setting
+                    inv_kernel_matrix[i_global, j_global] = cg(kernel_matrix_local, tmp_v, rtol=eps_0)[0][i_local]
 
-        # update rhs on the finest grid
-        # build kernel matrix
-        dist_matrix = np.empty((N, N_check), dtype=np.float64)
-        for column in range(N_check):
-            dist_matrix[:, column] = np.abs(nested_set - selected_multiset[column])
-        kernel_matrix = w31(dist_matrix / delta) / delta  # RBF
-        # update the rhs
-        local_approx = kernel_matrix @ alpha
-        target_rhs -= local_approx
+        else:  # no adaptivity, take all points
+            N_check = N_l
+            local_mask = np.ones(N_l, dtype=np.bool)
+            local_set_cardinality_ratio[current_level] = 1
+            # update rhs and point set
+            selected_multiset = nested_set[:N_l]
+            # compute the scale and the kernel matrix
+            delta = nu * h1 * mu ** current_level
+            kernel_matrix = w11_kernel_matrix(nested_set[:N_l], nested_set[:N_l], delta, 1)
+            # inverse computation decomposition
+            inv_kernel_matrix = np.empty(kernel_matrix.shape)
+            for i_global in range(N_l):
+                tmp_v = np.zeros(N_l)
+                tmp_v[i_global] = 1
+                inv_kernel_matrix[:, i_global], _ = cg(kernel_matrix, tmp_v, rtol=eps_0)
+
+        # update rhs on the finest grid, computing the cardinals
+        # since the set are nested, we do not need to compute the cardinals on points contained at this level.
+        # the local approximation on previous iteration points is equal to the rhs, due to the cardinal proprieties
+        local_approx = np.copy(target_rhs)
+        chi = inv_kernel_matrix @ w11_kernel_matrix(nested_set[:N_l], nested_set[N_l:], delta, 1)
+        local_approx[N_l:] = target_rhs[:N_l][local_mask]@chi[local_mask, :]
 
         # update the threshold
-        eps_mask = np.zeros(N, dtype=bool)
-        for i in np.arange(N)[removed_mask]:
-            eps_mask[~eps_mask] = np.abs(nested_set[~eps_mask] - nested_set[i]) < \
-                                  rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
-        threshold += np.max(local_approx[eps_mask], initial=0)
+        if current_level >= adapt_start:
+            eps_mask = np.zeros(N, dtype=bool)
+            for i_global in np.arange(N)[removed_mask]:
+                eps_mask[~eps_mask] = np.abs(nested_set[~eps_mask] - nested_set[i_global]) < \
+                                      rad_const * mu ** current_level * h1 * np.abs(current_level * np.log(mu) + np.log(h1))
+            threshold += np.max(local_approx[eps_mask], initial=0)
+        tmp_thresholding_list[current_level] = threshold
         # update evaluation of the solution and error
-        dist_matrix = np.empty((M, N_check), dtype=np.float64)
-        for column in range(N_check):
-            dist_matrix[:, column] = np.abs(eval_set - selected_multiset[column])
-        kernel_matrix = w31(dist_matrix / delta) / delta
-        approx_list += [approx_list[-1] + kernel_matrix @ alpha]
-        error_list += [error_list[-1] - kernel_matrix @ alpha]
+        # copy previous values
+        approx_list += [approx_list[-1]]
+        error_list += [error_list[-1]]
+        # computing cardinals over evaluation point and update approximation and error
+        chi = inv_kernel_matrix @ w11_kernel_matrix(nested_set[:N_l], eval_set, delta, 1)
+        approx_list[-1] += target_rhs[:N_l][local_mask]@chi[local_mask, :]
+        error_list[-1] -= target_rhs[:N_l][local_mask]@chi[local_mask, :]
+
+        # update rhs
+        target_rhs -= local_approx
 
         # plotting the solution
         approx_fig = plt.figure(num=current_level)
         approx_ax = approx_fig.add_subplot(1, 1, 1)
-        approx_ax.scatter(nested_set[:nested_size[current_level]], np.zeros(nested_size[current_level]), color="red")
+        approx_ax.scatter(nested_set[:N_l], np.zeros(N_l), color="red")
         approx_ax.scatter(selected_multiset, np.zeros(N_check), color="blue", label="selected points")
         approx_ax.plot(eval_points, error_list[-2], color="black")
         approx_ax.set_xlim(np.min(eval_set) - 0.1, np.max(eval_set) + 0.1)
         approx_ax.set_title(f"approximation error at {current_level = }", fontsize="small")
         plt.show()
-        if current_level in [2, 7]:
-            write_array_on_file(selected_multiset, f"adapt_set_{current_level}.csv")
+        if current_level in []:
+            write_array_on_file(selected_multiset, f"mix_set_{current_level}.csv")
             write_matrix_on_file(
                 np.concatenate([eval_points.reshape((-1, 1)), error_list[-2].reshape((-1, 1))], axis=-1),
-                f"adapt_error_{current_level}.csv")
-        if not N_check:
-            break
+                f"mix_error_{current_level}.csv", ".9f")
     point_ratio_fig = plt.figure(num=number_of_levels)
     point_ratio_ax = point_ratio_fig.add_subplot(1, 1, 1)
     point_ratio_ax.plot(np.arange(number_of_levels), local_set_cardinality_ratio, label="#tilda_X over #X")
     plt.title("ratio of spared points w.r.t. level")
     plt.show()
+    write_array_on_file(local_set_cardinality_ratio, f"point_ratio_mix_{mu}.csv")
+    write_array_on_file(tmp_thresholding_list, f"thresholding_mix_{mu}.csv")
 
 
 #######################
@@ -1171,10 +1220,10 @@ def multiscale_interp_adapt1d_local(nested_size, nested_set, target_rhs, mu, nu,
 top = 10
 bottom = 0
 # 9-7-6-5-4-3
-L = 7
+L = 6
 d = 1
 k_ = 2
-mu_ = 0.4
+mu_ = 0.3
 nu_ = 2
 kappa = 2
 supp_rad = 0.09
@@ -1226,37 +1275,36 @@ if d == 2:
                               )
 
 # ---------- 1d setting --------------
-if d == 1:
-    for kappa in range(5, 7):
-        nest1d_set, nest1d_size = generate_1d_nested_sequence(starting_step_size=mu_ / np.sqrt(d), mu=mu_, levels=L,
-                                                              end=top, start=bottom)
-        fig = plt.figure(num=11)
-        ax = fig.add_subplot()
-        for level in range(L - 1, -1, -1):
-            plt.scatter(nest1d_set[:nest1d_size[level]], level * np.ones((nest1d_size[level])))
-        plt.show()
+if d == 3:
+    nest1d_set, nest1d_size = generate_1d_nested_sequence(starting_step_size=mu_ / np.sqrt(d), mu=mu_, levels=L,
+                                                          end=top, start=bottom)
+    fig = plt.figure(num=11)
+    ax = fig.add_subplot()
+    for level in range(L - 1, -1, -1):
+        plt.scatter(nest1d_set[:nest1d_size[level]], level * np.ones((nest1d_size[level])))
+    plt.show()
 
-        eval_N = 500
-        eval_points = np.linspace(bottom, top, eval_N)
-        fig = plt.figure(num=12)
-        ax = fig.add_subplot()
-        ax.plot(eval_points, C1(eval_points), linewidth=1, antialiased=False)
-        ax.set_title("true function", fontsize="small")
-        plt.show()
+    eval_N = 500
+    eval_points = np.linspace(bottom, top, eval_N)
+    fig = plt.figure(num=12)
+    ax = fig.add_subplot()
+    ax.plot(eval_points, C1(eval_points), linewidth=1, antialiased=False)
+    ax.set_title("true function", fontsize="small")
+    plt.show()
 
-        multiscale_interp_adapt1d(nested_size=nest1d_size,
-                                  nested_set=nest1d_set,
-                                  target_rhs=C1(nest1d_set),
-                                  mu=mu_, nu=nu_, k=k_,
-                                  eval_set=eval_points,
-                                  eval_target=C1(eval_points),
-                                  h1=mu_ / np.sqrt(d),
-                                  rad_const=kappa,
-                                  eps_0=1e-8
-                                  )
+    multiscale_interp_adapt1d(nested_size=nest1d_size,
+                              nested_set=nest1d_set,
+                              target_rhs=C1(nest1d_set),
+                              mu=mu_, nu=nu_, k=k_,
+                              eval_set=eval_points,
+                              eval_target=C1(eval_points),
+                              h1=mu_ / np.sqrt(d),
+                              rad_const=kappa,
+                              eps_0=1e-8
+                              )
 
 # ---------- 1d setting -------------- (mixed)
-if d == 3:
+if d == 1:
     nest1d_set, nest1d_size = generate_1d_nested_sequence(starting_step_size=mu_ / np.sqrt(d), mu=mu_, levels=L,
                                                           end=top, start=bottom)
     fig = plt.figure(num=31)
@@ -1273,7 +1321,7 @@ if d == 3:
     ax.set_title("true function", fontsize="small")
     plt.show()
 
-    multiscale_interp_mix1d(nested_size=nest1d_size,
+    multiscale_interp_mix1d_local(nested_size=nest1d_size,
                             nested_set=nest1d_set,
                             target_rhs=C1(nest1d_set),
                             mu=mu_, nu=nu_, k=k_,
@@ -1282,5 +1330,6 @@ if d == 3:
                             h1=mu_ / np.sqrt(d),
                             rad_const=kappa,
                             #adapt_start=1,
+                            rho_const=kappa,
                             eps_0=1e-8
                             )
